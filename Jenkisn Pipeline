@@ -1,0 +1,70 @@
+pipeline {
+    agent {
+        node {
+            label "dev"
+        }
+    }
+    tools {
+        maven "mymaven"
+    }
+    stages {
+        stage ("Code") {
+            steps {
+                git 'https://github.com/om1895/dockerwebapp.git'
+            }
+        }
+        stage ("Build") {
+            steps {
+                sh "mvn clean install"
+            }
+        }
+        stage ("CQA") {
+            steps {
+                withSonarQubeEnv('mysonar') {
+                    sh "mvn clean verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=myproject"
+                }
+            }
+        }
+        stage ('Quality Gates') {
+            steps {
+                waitForQualityGate abortPipeline: true, credentialsId: 'sonar'
+            }
+        }
+        stage ('Artifact') {
+            steps {
+                nexusArtifactUploader artifacts: [[artifactId: 'vprofile', classifier: '', file: 'target/vprofile-v2.war', type: 'war']], credentialsId: 'nexus', groupId: 'com.visualpathit', nexusUrl: '3.107.42.216:8081', nexusVersion: 'nexus3', protocol: 'http', repository: 'myrepo', version: 'v2'
+            }
+        }
+        stage ('Creating Image') {
+            steps {
+                sh 'cp -r target Docker-app'
+                sh 'docker build -t appimage Docker-app'
+                sh 'docker build -t dbimage Docker-db'
+            }
+        }
+        stage ('Scan Image') {
+            steps {
+                sh 'trivy image appimage >> app-image.txt'
+                sh 'trivy image dbimage >> db-image.txt'
+            }
+        }
+        stage ('Registry') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'dockerhub-passwd') {
+                    // some block
+                    sh 'docker tag appimage omkar1895/flm-oct:java'
+                    sh 'docker tag dbimage omkar1895/flm-oct:db'
+                    sh 'docker push  omkar1895/flm-oct:db'
+                    sh 'docker push  omkar1895/flm-oct:java'
+                    }
+                }
+            }
+        }
+        stage ('Deploy') {
+            steps {
+                sh 'docker stack deploy myapp --compose-file=compose.yml'
+            }
+        }
+    }
+}
